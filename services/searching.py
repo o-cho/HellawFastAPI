@@ -1,4 +1,6 @@
-
+"""
+RAG 검색기.
+"""
 
 from elasticsearch import Elasticsearch
 from sentence_transformers import SentenceTransformer

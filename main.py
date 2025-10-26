@@ -1,7 +1,7 @@
 from fastapi import FastAPI
-from routers import AIChat
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from routers.chat_pipeline import router
 
 app = FastAPI(title="Hellaw AI Chatbot", version="1.0.0")
 
@@ -13,7 +13,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(AIChat.router, prefix="/api")
+app.include_router(router, prefix="/api")
 
 @app.get("/")
 async def root():
