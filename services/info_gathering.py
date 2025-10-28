@@ -4,6 +4,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import LLMChain
 from langchain_core.messages import HumanMessage, SystemMessage
+import os
+
 
 # 도메인 체크리스트 지정
 domain_checklists = {
@@ -116,16 +118,20 @@ domain_checklists = {
 #     yield "data: [DONE]\n\n"
 
 async def info_gathering_agent(query: str, domain: str, memory_context):
+
+    print(f"[DEBUG] info_gathering_agent 실행됨 — query={query}, domain={domain}")
+    print(f"[DEBUG] memory_context.messages 수: {len(memory_context.chat_memory.messages)}")
+
     checklist = domain_checklists.get(domain, ["상황 설명", "원인", "결과"])
 
-    # ✅ 모델 정의
+    # 모델 정의
     llm = ChatOpenAI(
         model="gpt-4o-mini",
         temperature=0.5,
         streaming=True
     )
 
-    # ✅ 프롬프트 정의
+    # 프롬프트 정의
     prompt = ChatPromptTemplate.from_messages([
         ("system", f"""
         당신은 {domain} 분야의 전문 법률 상담사입니다.  
@@ -150,12 +156,17 @@ async def info_gathering_agent(query: str, domain: str, memory_context):
         ("user", "{query}")
     ])
 
-    # ✅ 메모리 포함 체인 구성
+    rendered = prompt.format_messages(query=query)
+    print("[DEBUG] 실제 모델에 전달된 프롬프트 ↓")
+    for m in rendered:
+        print(f"({m.type}) {m.content[:150]}")
+
+    # 메모리 포함 체인 구성
     chain = LLMChain(llm=llm, prompt=prompt, memory=memory_context)
 
     accumulated = ""
 
-    # ✅ LangChain의 astream()으로 프롬프트와 메모리 모두 반영
+    # LangChain의 astream()으로 프롬프트와 메모리 모두 반영
     async for chunk in chain.astream({"query": query, "domain": domain}):
         if hasattr(chunk, "content") and chunk.content:
             token = chunk.content

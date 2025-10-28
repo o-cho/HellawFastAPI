@@ -6,15 +6,23 @@ class MemoryManager:
     def __init__(self):
         """세션별 LangChain 메모리 및 모드 관리"""
         self.sessions = defaultdict(lambda: {
-            "memory": ConversationBufferMemory(memory_key="history", return_messages=True),
-            "mode": "free_chat"
+            "memory": ConversationBufferMemory(
+                memory_key="history",
+                input_key="query",
+                return_messages=True,
+                ),
+            "mode": "free_chat",
         })
 
     def ensure_session(self, conv_idx):
         """세션이 없으면 새로 만들어주는 함수"""
         if conv_idx not in self.sessions:
             self.sessions[conv_idx] = {
-                "memory": ConversationBufferMemory(memory_key="history", return_messages=True),
+                "memory": ConversationBufferMemory(
+                    memory_key="history",
+                    input_key="query",
+                    return_messages=True,
+                    ),
                 "mode": "free_chat"
             }
 
