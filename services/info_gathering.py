@@ -34,25 +34,100 @@ domain_checklists = {
         ]
     }
 
-async def info_gathering_agent(query: str, domain: str, memory_context:str):
-    """
-    사용자의 상황을 분석하고 필요한 정보를 수집함.
-    실제 토큰 단위로 스트리밍 전송함.
-    """
+# async def info_gathering_agent(query: str, domain: str, memory_context:str):
+#     """
+#     사용자의 상황을 분석하고 필요한 정보를 수집함.
+#     실제 토큰 단위로 스트리밍 전송함.
+#     """
 
-    # OPENAI 모델 정의
+#     # OPENAI 모델 정의
+#     llm = ChatOpenAI(
+#         model="gpt-4.1-mini",
+#         temperature=0.5,
+#         streaming=True
+#     )
+
+#     # 프롬프트 템플릿 정의
+#     prompt = ChatPromptTemplate.from_messages([
+#         ("system", """
+#         당신은 {domain} 분야의 전문 법률 상담사입니다.  
+#         사용자의 발화를 근거로 사건 파악을 위해 필요한 질문을 던지세요.
+#         공감하는 어투로 자연스럽게 이어가세요.
+        
+#         판단 기준:
+#         - 아래 항목이 모두 충족되어야 'ready_for_advice = true' 로 간주합니다.
+#         {checklist}
+#         - 단 하나라도 불확실하거나 누락된 요소가 있다면 False로 판단합니다.
+#         - 단순히 피해 사실만 언급했을 경우에는 False입니다.
+#         - 거래 시점, 원인, 결과 중 어느 하나라도 모호하면 False입니다.
+
+#         ---
+#         임무:
+#         1. 우선 사용자의 상황을 2-3 문장 정도로 요약하고 공감해주세요.
+#         2. 다음 중 하나를 수행하세요:
+#         - 정보 부족 → 판단 기준을 바탕으로 추가 질문을 제시하세요.
+#         - 충분함 → 상담 톤으로 "실제 판례를 검색 중입니다."
+#         """),
+#         MessagesPlaceholder(variable_name="history"), # 대화 기록을 연결할 때 사용
+#         ("user", "새 사용자 발화: {query}")
+#     ])
+
+
+#     # llm 체인 구성
+#     chain = LLMChain(llm=llm, prompt=prompt, memory=memory_context)
+
+#     checklist = domain_checklists.get(domain, ["상황 설명", "원인", "결과"])
+#     accumulated = ""
+
+#     # 시스템 메시지 정의
+#     system_prompt = f"""
+#     당신은 {domain} 분야의 전문 법률 상담사입니다.  
+#     사용자의 발화를 근거로 사건 파악을 위해 필요한 질문을 던지세요.
+#     공감하는 어투로 자연스럽게 이어가세요.
+
+#     판단 기준:
+#     - 아래 항목이 모두 충족되어야 'ready_for_advice = true' 로 간주합니다.
+#       {checklist}
+#     - 단 하나라도 불확실하거나 누락된 요소가 있다면 False로 판단합니다.
+#     - 단순히 피해 사실만 언급했을 경우에는 False입니다.
+#     - 거래 시점, 원인, 결과 중 어느 하나라도 모호하면 False입니다.
+
+#     ---
+#     임무:
+#     1. 우선 사용자의 상황을 2-3 문장 정도로 요약하고 공감해주세요.
+#     2. 다음 중 하나를 수행하세요:
+#        - 정보 부족 → 판단 기준을 바탕으로 추가 질문을 제시하세요.
+#        - 충분함 → 상담 톤으로 "실제 판례를 검색 중입니다."
+#     """
+
+#     # 스트리밍 수행
+#     async for chunk in llm.astream([
+#         SystemMessage(content=system_prompt),
+#         HumanMessage(content=query)
+#     ]):
+#         if hasattr(chunk, "content") and chunk.content:
+#             token = chunk.content
+#             accumulated += token
+#             yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+#             await asyncio.sleep(0.01)
+
+#     # 최종 응답
+#     yield f"data: {json.dumps({'full': accumulated}, ensure_ascii=False)}\n\n"
+#     yield "data: [DONE]\n\n"
+
+async def info_gathering_agent(query: str, domain: str, memory_context):
+    checklist = domain_checklists.get(domain, ["상황 설명", "원인", "결과"])
+
+    # ✅ 모델 정의
     llm = ChatOpenAI(
-        model="gpt-4.1-mini",
+        model="gpt-4o-mini",
         temperature=0.5,
         streaming=True
     )
 
-    # llm 체인 구성
-    chain = LLMChain(llm=llm, prompt=prompt, memory=memory_context)
-
-    # 프롬프트 템플릿 정의
+    # ✅ 프롬프트 정의
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """
+        ("system", f"""
         당신은 {domain} 분야의 전문 법률 상담사입니다.  
         사용자의 발화를 근거로 사건 파악을 위해 필요한 질문을 던지세요.
         공감하는 어투로 자연스럽게 이어가세요.
@@ -68,48 +143,25 @@ async def info_gathering_agent(query: str, domain: str, memory_context:str):
         임무:
         1. 우선 사용자의 상황을 2-3 문장 정도로 요약하고 공감해주세요.
         2. 다음 중 하나를 수행하세요:
-        - 정보 부족 → 판단 기준을 바탕으로 추가 질문을 제시하세요.
-        - 충분함 → 상담 톤으로 "실제 판례를 검색 중입니다."
+           - 정보 부족 → 판단 기준을 바탕으로 추가 질문을 제시하세요.
+           - 충분함 → 상담 톤으로 "실제 판례를 검색 중입니다."
         """),
-        MessagesPlaceholder(variable_name="history"), # 대화 기록을 연결할 때 사용
-        ("user", "새 사용자 발화: {query}")
+        MessagesPlaceholder(variable_name="history"),
+        ("user", "{query}")
     ])
 
-    checklist = domain_checklists.get(domain, ["상황 설명", "원인", "결과"])
+    # ✅ 메모리 포함 체인 구성
+    chain = LLMChain(llm=llm, prompt=prompt, memory=memory_context)
+
     accumulated = ""
 
-    # 시스템 메시지 정의
-    system_prompt = f"""
-    당신은 {domain} 분야의 전문 법률 상담사입니다.  
-    사용자의 발화를 근거로 사건 파악을 위해 필요한 질문을 던지세요.
-    공감하는 어투로 자연스럽게 이어가세요.
-
-    판단 기준:
-    - 아래 항목이 모두 충족되어야 'ready_for_advice = true' 로 간주합니다.
-      {checklist}
-    - 단 하나라도 불확실하거나 누락된 요소가 있다면 False로 판단합니다.
-    - 단순히 피해 사실만 언급했을 경우에는 False입니다.
-    - 거래 시점, 원인, 결과 중 어느 하나라도 모호하면 False입니다.
-
-    ---
-    임무:
-    1. 우선 사용자의 상황을 2-3 문장 정도로 요약하고 공감해주세요.
-    2. 다음 중 하나를 수행하세요:
-       - 정보 부족 → 판단 기준을 바탕으로 추가 질문을 제시하세요.
-       - 충분함 → 상담 톤으로 "실제 판례를 검색 중입니다."
-    """
-
-    # 스트리밍 수행
-    async for chunk in llm.astream([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=query)
-    ]):
+    # ✅ LangChain의 astream()으로 프롬프트와 메모리 모두 반영
+    async for chunk in chain.astream({"query": query, "domain": domain}):
         if hasattr(chunk, "content") and chunk.content:
             token = chunk.content
             accumulated += token
             yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.01)
 
-    # 최종 응답
     yield f"data: {json.dumps({'full': accumulated}, ensure_ascii=False)}\n\n"
     yield "data: [DONE]\n\n"

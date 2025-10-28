@@ -1,5 +1,6 @@
 from collections import defaultdict
 from langchain.memory import ConversationBufferMemory
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 class MemoryManager:
     def __init__(self):
@@ -33,7 +34,18 @@ class MemoryManager:
         self.sessions[conv_idx]["mode"] = mode
 
     def add(self, conv_idx, role, content):
-        """대화를 메모리에 추가"""
+        """대화를 LangChain Memory에 추가"""
         self.ensure_session(conv_idx)
         memory = self.sessions[conv_idx]["memory"]
-        memory.chat_memory.add_message({"role": role, "content": content})
+
+        # 역할에 따라 올바른 메시지 객체로 변환
+        if role == "user":
+            msg = HumanMessage(content=content)
+        elif role == "ai":
+            msg = AIMessage(content=content)
+        elif role == "system":
+            msg = SystemMessage(content=content)
+        else:
+            raise ValueError(f"Unknown role: {role}")
+
+        memory.chat_memory.add_message(msg)

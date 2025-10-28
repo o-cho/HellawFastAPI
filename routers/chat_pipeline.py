@@ -109,15 +109,15 @@ async def chat_pipeline(request: ChatRequest):
         yield f"data: {{\"conv_idx\": \"{conv_idx}\"}}\n\n"
 
         if current_mode == "info_gathering":
-            async for chunk in info_gathering_agent(memory_context, query, domain):
+            async for chunk in info_gathering_agent(query, domain, memory_context):
                 yield chunk
 
         elif current_mode == "advising":
-            async for chunk in advising_agent(memory_context, query, domain):
+            async for chunk in advising_agent(query, domain):
                 yield chunk
 
         elif current_mode == "guidance":
-            async for chunk in guidance_agent(memory_context, query, domain):
+            async for chunk in guidance_agent(query, domain, memory_context):
                 yield chunk
 
         else:  # free_chat

@@ -37,7 +37,7 @@ prompt = ChatPromptTemplate.from_messages([
 # # 메모리 지정
 # memory = ConversationBufferMemory(memory_key = "history", input_key="query", return_messages=True)
 
-async def advising_agent(memory_context:str, user_query:str, domain:str):
+async def advising_agent(user_query:str, domain:str, memory_context:str):
     """
     판례를 기반으로 조언을 제공함.
     """

@@ -38,8 +38,7 @@ async def free_chat_agent(query: str, domain: str, memory_context:str):
     accumulated = ""
 
     async for chunk in chain.astream({
-        "query":query,
-        "domain":domain
+        "query":query
     }):
         token = chunk.content if hasattr(chunk, "content") else str(chunk)
         accumulated += token
