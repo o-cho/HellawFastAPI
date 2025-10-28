@@ -5,7 +5,7 @@ from typing import Optional
 
 # Spring → FastAPI 요청 데이터 구조
 class AIChatRequest(BaseModel):
-    question: str
+    query: str
     domain: str
     conv_idx: Optional[str] = None
 
@@ -18,5 +18,10 @@ class AIChatResponse(BaseModel):
 # FastAPI → Spring 응답 데이터 구조 (DB 저장용)
 class AIChatData(BaseModel):
     conv_idx: str
-    question: str
+    query: str
     answer: str
+
+class ChatRequest(BaseModel):
+    query: str
+    domain: str
+    conv_idx: str = None

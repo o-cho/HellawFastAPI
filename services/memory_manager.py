@@ -1,53 +1,39 @@
-from collections import defaultdict, deque
-import uuid
+from collections import defaultdict
+from langchain.memory import ConversationBufferMemory
 
 class MemoryManager:
-    def __init__(self, max_turns=15):
-        """
-        여러 세션(conv_idx)별로 대화 히스토리와 모드를 관리하는 매니저.
-        """
-        self.max_turns = max_turns
+    def __init__(self):
+        """세션별 LangChain 메모리 및 모드 관리"""
         self.sessions = defaultdict(lambda: {
-            "history": deque(maxlen=max_turns),
+            "memory": ConversationBufferMemory(memory_key="history", return_messages=True),
             "mode": "free_chat"
         })
 
-    def ensure_session(self, conv_idx: str):
-        """세션이 존재하지 않으면 새로 생성."""
+    def ensure_session(self, conv_idx):
+        """세션이 없으면 새로 만들어주는 함수"""
         if conv_idx not in self.sessions:
             self.sessions[conv_idx] = {
-                "history": deque(maxlen=self.max_turns),
+                "memory": ConversationBufferMemory(memory_key="history", return_messages=True),
                 "mode": "free_chat"
             }
 
-    def add(self, conv_idx: str, role: str, content: str):
-        """특정 세션(conv_idx)의 대화 추가."""
+    def get_memory(self, conv_idx):
+        """특정 세션의 LangChain Memory 반환"""
         self.ensure_session(conv_idx)
-        self.sessions[conv_idx]["history"].append({"role": role, "content": content})
+        return self.sessions[conv_idx]["memory"]
 
-    def get_context(self, conv_idx: str):
-        """특정 세션(conv_idx)의 대화 이력을 문자열로 반환."""
-        self.ensure_session(conv_idx)
-        hist = self.sessions[conv_idx]["history"]
-        return "\n".join(
-            [f"{h['role'].upper()}: {h['content']}" for h in hist]
-        )
-
-    def reset(self, conv_idx: str):
-        """특정 세션(conv_idx) 초기화."""
-        if conv_idx in self.sessions:
-            del self.sessions[conv_idx]
-
-    def get_mode(self, conv_idx: str):
-        """특정 세션(conv_idx)의 현재 모드 반환."""
+    def get_mode(self, conv_idx):
+        """특정 세션의 conv_idx 반환"""
         self.ensure_session(conv_idx)
         return self.sessions[conv_idx]["mode"]
 
-    def set_mode(self, conv_idx: str, new_mode: str):
-        """특정 세션(conv_idx)의 모드 설정."""
+    def set_mode(self, conv_idx, mode):
+        """특정 세션의 모드 변경"""
         self.ensure_session(conv_idx)
-        self.sessions[conv_idx]["mode"] = new_mode
+        self.sessions[conv_idx]["mode"] = mode
 
-    def get_all_sessions(self):
-        """디버깅용: 현재 존재하는 세션 목록 반환."""
-        return list(self.sessions.keys())
+    def add(self, conv_idx, role, content):
+        """대화를 메모리에 추가"""
+        self.ensure_session(conv_idx)
+        memory = self.sessions[conv_idx]["memory"]
+        memory.chat_memory.add_message({"role": role, "content": content})

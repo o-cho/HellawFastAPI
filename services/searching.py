@@ -1,9 +1,4 @@
-"""
-RAG 검색기.
-"""
-
 from elasticsearch import Elasticsearch
-from sentence_transformers import SentenceTransformer
 from openai import OpenAI
 import numpy as np
 from dotenv import load_dotenv
