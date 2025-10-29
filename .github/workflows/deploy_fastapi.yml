@@ -37,8 +37,8 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             echo "Connecting to private server..."
-            ssh -o StrictHostKeyChecking=no root@10.10.20.6"
-              cd /home/ubuntu/HellawFastAPI &&
+            ssh -o StrictHostKeyChecking=no root@10.10.20.6 "
+              cd /root &&
               echo 'Pulling latest Docker image...' &&
               docker pull ${{ secrets.DOCKER_USERNAME }}/hellaw_fastapi:latest &&
               echo 'Restarting Docker Compose...' &&
@@ -46,4 +46,3 @@ jobs:
               docker compose up -d
             "
             echo "[Gateway] Deployment completed successfully!"
-
