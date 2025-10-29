@@ -36,6 +36,3 @@ desktop.ini
 *.tmp
 *.bak
 *.swp
-
-Dockerfile
-docker-compose.yml
