@@ -1,22 +1,27 @@
-# 요청(Request)과 응답(Response)을 명확하게 정의하기 위해 사용.
-
-from pydantic import BaseModel
 from typing import Optional
+from pydantic import BaseModel
 
-# Spring → FastAPI 요청 데이터 구조
+# TODO 각 구조가 어디에서 쓰이는지 확인
 class AIChatRequest(BaseModel):
-    question: str
+    """Spring → FastAPI 요청 데이터 구조"""
+    query: str
     domain: str
     conv_idx: Optional[str] = None
 
-# FastAPI → Spring 응답 데이터 구조
 class AIChatResponse(BaseModel):
+    """FastAPI → Spring 응답 데이터 구조"""
     role: str
     content: dict
     conv_idx: str
 
-# FastAPI → Spring 응답 데이터 구조 (DB 저장용)
 class AIChatData(BaseModel):
+    """FastAPI → Spring 응답 데이터 구조 (DB 저장용)"""
     conv_idx: str
-    question: str
+    query: str
     answer: str
+
+class ChatRequest(BaseModel):
+    """FastAPI chat_pipeline endpoint 요청 데이터 구조"""
+    query: str
+    domain: str
+    conv_idx: str = None

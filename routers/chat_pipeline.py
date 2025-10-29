@@ -1,223 +1,196 @@
 from fastapi import APIRouter, Request
-from models.models import AIChatRequest, AIChatResponse
+from models.models import ChatRequest
 from services.memory_manager import MemoryManager
-from services.free_chat import free_chat_agent
-from services.info_gathering import info_gathering_agent
-from services.advising import advising_agent
-from services.guidance import guidance_agent
 from services.mode_classifier import mode_classifier
-import uuid, requests, os, json, asyncio
+from services.chat_agent import (
+    free_chat_agent,
+    info_gathering_agent,
+    advising_agent,
+    guidance_agent
+)
+import os, uuid, json
+import pymysql
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 
+
+from config import (
+    HELLAW_DB_HOST,
+    HELLAW_DB_USER,
+    HELLAW_DB_PASSWORD,
+    HELLAW_DB_NAME
+)
+
 router = APIRouter(prefix="/AIChat", tags=["AIChat"])
-memory = MemoryManager(max_turns=15)
+memory = MemoryManager()
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 SPRING_API_URL = "http://localhost:8087/hellaw/api/AIChat"
-memory_sessions = {}
 
-@router.get("/stream")
-async def stream_chat_pipeline(question: str, domain: str, conv_idx: str = None):
-    """
-    ✅ 통합 스트리밍 파이프라인 (안정화 버전)
-    free_chat → info_gathering → advising → guidance → free_chat
-    """
-    # 세션별 메모리 가져오기 (없으면 새로 생성)
-    if conv_idx not in memory_sessions:
-        memory_sessions[conv_idx] = MemoryManager(max_turns=15)
-        print(f"🆕 새 MemoryManager 생성: conv_idx={conv_idx}")
-    memory = memory_sessions[conv_idx]
+def get_chat_history_from_db(conv_idx: str):
+    conn = pymysql.connect(
+        host=HELLAW_DB_HOST,
+        user=HELLAW_DB_USER,
+        password=HELLAW_DB_PASSWORD,
+        database=HELLAW_DB_NAME,
+        port=3307,
+        cursorclass=pymysql.cursors.DictCursor,
+    )
+    with conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT question, answer
+                FROM tb_ai_chat
+                WHERE conv_idx = %s
+                ORDER BY created_at ASC
+            """,
+            (conv_idx,),
+            )
+            return cursor.fetchall()
 
-    context = memory.get_context(conv_idx)
+def db_has_conv(conv_idx):
+    conn = pymysql.connect(
+        host=HELLAW_DB_HOST,
+        user=HELLAW_DB_USER,
+        password=HELLAW_DB_PASSWORD,
+        database=HELLAW_DB_NAME,
+        port=3307,
+        cursorclass=pymysql.cursors.DictCursor
+    )
+    with conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM tb_ai_chat WHERE conv_idx = %s LIMIT 1", (conv_idx,))
+            return cursor.fetchone() is not None
+
+def restore_memory_from_db(conv_idx: str, db_records):
+    memory_context = memory.get_memory(conv_idx)
+    for row in db_records:
+        if row.get("question"):
+            memory_context.chat_memory.add_message(
+                {
+                    "role": "user",
+                    "content": row["question"]
+                }
+            )
+        if row.get("answer"):
+            memory_context.chat_memory.add_message(
+                {
+                    "role": "ai",
+                    "content": row["answer"]
+                }
+            )
+
+
+@router.post("/stream", response_class=StreamingResponse)
+async def chat_pipeline(request: ChatRequest):
+
+    # 변수 설정
+    conv_idx = request.conv_idx or f"stream_{uuid.uuid4()}"
+    domain = request.domain
+    query = request.query
+
+    print(f"SSE 요청 수신...")
+    print(f"query : {query}")
+    print(f"domain : {domain}")
+    print(f"conv_idx : {conv_idx}")
+
+    memory_context = memory.get_memory(conv_idx)
+
+    if db_has_conv(conv_idx) and len(memory_context.chat_memory.messages) == 0:
+        db_records = get_chat_history_from_db(conv_idx)
+        restore_memory_from_db(conv_idx, db_records)
+        print(f"[{conv_idx}] DB 기반 메모리 복원 완료 ({len(db_records)}개 메시지)")
+    elif not db_has_conv(conv_idx):
+        print(f"[{conv_idx}] 신규 대화 시작")
+    else:
+        print(f"[{conv_idx}] 기존 세션, DB 복원 생략")
+
+    memory_context = memory.get_memory(conv_idx)
     current_mode = memory.get_mode(conv_idx)
 
-    print(f"🚀 [STREAM START] conv_idx={conv_idx}, domain={domain}, question={question}")
+    print(f"[세션 : {conv_idx}] 현재 모드 : {current_mode}")
 
-    # === 1️⃣ 초기 모드 분류 ===
-    if current_mode == "free_chat" and len(context.strip()) == 0:
-        classification = await mode_classifier(question, context, domain)
-        current_mode = classification.get("next_mode", "free_chat")
-        reason = classification.get("reason", "")
-        memory.set_mode(conv_idx, current_mode)
-        print(f"[Mode → {current_mode}] 이유: {reason}")
+    # 메모리 등록
+    memory.add(conv_idx, "user", query)
+    print(f"사용자 발화 등록 완료, 메모리 메시지 수: {len(memory_context.chat_memory.messages)}")
+
+    # free_chat일 때 mode 판단
+    if current_mode == "free_chat":
+        print("모드 분류 중...")
+        mode_classification = await mode_classifier(query, memory_context, domain)
+        next_mode = mode_classification.get("next_mode", "free_chat")
+        reason = mode_classification.get("reason", "")
+        memory.set_mode(conv_idx, next_mode)
+        print(f"모드 전환 : {current_mode} -> {next_mode} 이유: {reason}")
+        current_mode = next_mode
     else:
-        print(f"[Mode 유지] conv_idx={conv_idx}, 현재 모드: {current_mode}")
-
-    # === 2️⃣ 스트림 생성 ===
+        print(f"모드 유지 : {current_mode}")
+    
+    # SSE 이벤트 스트림
     async def event_stream():
-        accumulated = ""
+        yield f"data: {{\"conv_idx\": \"{conv_idx}\"}}\n\n"
+        print(f"[{conv_idx}] 스트리밍 시작 (모드: {current_mode})")
 
         try:
-            # ✅ 안전한 JSON 파서 (오류 방지용)
-            def safe_parse(chunk: str):
-                try:
+            if current_mode == "info_gathering":
+                full_text = ""
+
+                async for chunk in info_gathering_agent(query, domain, memory_context):
+                    print(f"[INFO_GATHERING] 토큰: {chunk[:100]}")
+                    yield chunk
+
+                    # 모든 chunk에서 JSON 데이터 누적
                     if chunk.startswith("data: "):
-                        return json.loads(chunk[len("data: "):].strip())
-                    else:
-                        return json.loads(chunk.strip())
-                except Exception:
-                    return {}
+                        raw = chunk.replace("data: ", "").strip()
 
-            # === free_chat 단계 ===
-            if current_mode == "free_chat":
-                async for chunk in free_chat_agent(question, context, domain):
-                    yield chunk
-                    data = safe_parse(chunk)
-                    accumulated += data.get("token", "")
-                next_mode = "info_gathering"
+                        # [DONE]은 JSON이 아니므로 건너뜀
+                        if raw == "[DONE]":
+                            continue
 
-            # === info_gathering 단계 ===
-            elif current_mode == "info_gathering":
-                async for chunk in info_gathering_agent(question, domain, context):
-                    yield chunk
-                    data = safe_parse(chunk)
-                    accumulated += data.get("token", "")
-                next_mode = "info_gathering"
+                        try:
+                            data = json.loads(raw)
+                            # token 또는 full 둘 다 커버
+                            token = data.get("token") or data.get("full")
+                            if token:
+                                full_text += token
+                        except Exception as e:
+                            print(f"[파싱 예외 발생]: {e}")
+                            continue
 
-                # ✅ ready_for_advice 감지
-                if "ready_for_advice" in accumulated.lower() and "true" in accumulated.lower():
-                    print("정보 수집 완료 → 조언 단계로 전환합니다.")
-                    async for chunk in advising_agent(question, context, domain):
+                # 루프가 끝난 후 full_text를 기준으로 전환 판단
+                if "실제 판례를 검색 중입니다" in full_text:
+                    memory.set_mode(conv_idx, "advising")
+                    print("[ADVISING] 모드 전환")
+
+                    async for chunk in advising_agent(query, domain, memory_context):
+                        print(f"[ADVISING] 토큰: {chunk[:100]}")
                         yield chunk
-                        data = safe_parse(chunk)
-                        accumulated += data.get("token", "")
+                else:
+                    print("추가 정보 수집 필요.")
 
-                    async for chunk in guidance_agent(accumulated, context, domain):
-                        yield chunk
-                        data = safe_parse(chunk)
-                        accumulated += data.get("token", "")
 
-                    next_mode = "free_chat"
-
-            else:
-                # fallback
-                async for chunk in free_chat_agent(question, context, domain):
+            elif current_mode == "advising":
+                async for chunk in advising_agent(query, domain, memory_context):
+                    print(f"[ADVISING] 토큰: {chunk[:100]}")
                     yield chunk
-                    data = safe_parse(chunk)
-                    accumulated += data.get("token", "")
-                next_mode = "free_chat"
 
-            # === 3️⃣ 메모리 및 Spring DB 저장 ===
-            memory.add(conv_idx, "user", question)
-            memory.add(conv_idx, "assistant", accumulated)
-            memory.set_mode(conv_idx, next_mode)
+            elif current_mode == "guidance":
+                async for chunk in guidance_agent(query, domain, memory_context):
+                    print(f"[GUIDANCE] 토큰: {chunk[:100]}")
+                    yield chunk
+                memory.set_mode(conv_idx, "free_chat")
+                print(f"[{conv_idx}] guidance 종료 → free_chat 모드로 복귀")
 
-            payload = {
-                "conv_idx": conv_idx,
-                "question": question,
-                "answer": accumulated
-            }
-
-            try:
-                requests.post(f"{SPRING_API_URL}/save", json=payload, timeout=5)
-            except Exception as e:
-                print(f"⚠️ Spring 저장 실패: {e}")
-
-            print(f"✅ 스트리밍 완료: {conv_idx}")
-            yield "data: [DONE]\n\n"
-
+            else:  # free_chat
+                async for chunk in free_chat_agent(query, domain, memory_context):
+                    print(f"[FREE_CHAT] 토큰: {chunk[:100]}")
+                    yield chunk
+    
         except Exception as e:
-            print(f"❌ 스트림 오류: {e}")
-            err_json = json.dumps({"error": str(e)}, ensure_ascii=False)
-            yield f"data: {err_json}\n\n"
+            print(f"스트림 처리 중 예외 발생 : {type(e).__name__} - {e}")
+            yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
+        
+        print(f"[{conv_idx}] 스트리밍 완료")
+        yield "data: [DONE]\n\n"
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream"
-    )
-
-
-
-
-@router.post("/", response_model=AIChatResponse)
-async def chat_pipeline(req: AIChatRequest, request: Request):
-    """
-    전체 대화 파이프라인 (다중 세션 지원)
-    free_chat → info_gathering → advising → guidance → free_chat
-    """
-    user_query = req.question
-    domain = req.domain
-    conv_idx = req.conv_idx or str(uuid.uuid4())  # ✅ 새 세션이면 자동 생성
-
-    # 세션별 컨텍스트 및 모드 가져오기
-    context = memory.get_context(conv_idx)
-    current_mode = memory.get_mode(conv_idx)
-
-    # 새로운 세션일 경우만 LLM 분류 실행
-    if current_mode == "free_chat" and len(context.strip()) == 0:
-        classification = await mode_classifier(user_query, context, domain)
-        current_mode = classification.get("next_mode", "free_chat")
-        reason = classification.get("reason", "")
-        memory.set_mode(conv_idx, current_mode)
-        print(f"[Mode → {current_mode}] 이유: {reason}")
-    else:
-        print(f"[Mode 유지] conv_idx={conv_idx}, 현재 모드: {current_mode}")
-
-    # === 모드별 에이전트 실행 ===
-    if current_mode == "free_chat":
-        agent_result = await free_chat_agent(user_query, context, domain)
-        agent_message = agent_result.get("message", "")
-        next_mode = agent_result.get("next_state", "free_chat")
-
-    elif current_mode == "info_gathering":
-        agent_result = await info_gathering_agent(user_query, domain, context)
-        agent_message = agent_result.get("message", "")
-        next_mode = agent_result.get("next_state", "info_gathering")
-
-        if agent_result.get("ready_for_advice", False):
-            print("정보 수집 완료 → 조언 단계로 전환합니다.")
-
-            advising_result = await advising_agent(user_query, context, domain)
-            advice_message = advising_result.get("advice", "조언 생성 실패")
-
-            guidance_result = await guidance_agent(advice_message, context, domain)
-            guidance_message = guidance_result.get("message", "후속 안내 생성 실패")
-
-            agent_message = f"{agent_message}\n\n📘 조언: {advice_message}\n💡 가이드: {guidance_message}"
-            next_mode = "free_chat"
-
-    # === 메모리 업데이트 ===
-    memory.add(conv_idx, "user", user_query)
-    memory.add(conv_idx, "assistant", agent_message)
-    memory.set_mode(conv_idx, next_mode)
-    print(f"모드 전환 완료: {current_mode} → {next_mode} (conv_idx={conv_idx})")
-
-    # === Spring DB 저장 ===
-    payload = {
-        "conv_idx": conv_idx,
-        "question": user_query,
-        "answer": agent_message
-    }
-    headers = {}
-
-    auth_header = request.headers.get("authorization")
-
-    if auth_header:
-        auth_header = auth_header.replace('"', '').strip()
-
-        for prefix in ["bearer:", "bearer ", "access_token:", "access_token "]:
-            if auth_header.lower().startswith(prefix):
-                auth_header = auth_header[len(prefix):].strip()
-                break
-
-        headers["Authorization"] = f"Bearer {auth_header}"
-
-        print(f"[DEBUG] 정제 후 Authorization 헤더: {headers['Authorization']}")
-
-
-
-    try:
-        res = requests.post(f"{SPRING_API_URL}/save", json=payload, headers=headers, timeout=5)
-        if res.status_code != 200:
-            print(f"Spring DB 저장 실패: {res.text}")
-    except Exception as e:
-        print(f"Spring 연결 오류: {e}")
-
-    # === 최종 응답 ===
-    return AIChatResponse(
-        role="assistant",
-        content={"message": agent_message},
-        current_mode=next_mode,
-        conv_idx=conv_idx
-    )
-
+    # FastAPI SSE 응답
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
