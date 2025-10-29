@@ -35,6 +35,8 @@ jobs:
           host: ${{ secrets.SERVER_IP }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          timeout: 30m
+          script_stop: false
           script: |
             echo "Connecting to private server..."
             ssh -o StrictHostKeyChecking=no root@10.10.20.6 "

@@ -13,5 +13,6 @@ requests==2.32.5
 httpx==0.28.1
 httpx-sse==0.4.3
 sentence-transformers==5.1.2
-torch==2.9.0
+torch==2.9.0+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
 tiktoken==0.5.2
