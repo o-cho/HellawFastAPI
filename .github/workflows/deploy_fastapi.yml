@@ -29,14 +29,21 @@ jobs:
           docker push ${{ secrets.DOCKER_USERNAME }}/hellaw_fastapi:latest
 
       # 원격 서버 배포
-      - name: Deploy to Server via SSH
+      - name: Deploy to Private Server via Public Gateway
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_IP }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            cd /home/ubuntu/HellawFastAPI
-            docker pull ${{ secrets.DOCKER_USERNAME }}/hellaw_fastapi:latest
-            docker-compose down
-            docker-compose up -d
+            echo "Connecting to private server..."
+            ssh -o StrictHostKeyChecking=no root@10.10.20.6"
+              cd /home/ubuntu/HellawFastAPI &&
+              echo 'Pulling latest Docker image...' &&
+              docker pull ${{ secrets.DOCKER_USERNAME }}/hellaw_fastapi:latest &&
+              echo 'Restarting Docker Compose...' &&
+              docker compose down &&
+              docker compose up -d
+            "
+            echo "[Gateway] Deployment completed successfully!"
+
