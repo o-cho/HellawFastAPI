@@ -18,7 +18,7 @@ app.include_router(router, prefix="/api")
 
 @app.get("/")
 async def root():
-    return {"message": "FASTAPI 정상작동"}
+    return {"message": "FASTAPI 정상 작동"}
 
 if __name__ == "__main__":
     uvicorn.run(
