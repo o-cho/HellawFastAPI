@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Request
 from models.models import ChatRequest
 from services.memory_manager import MemoryManager
-from services.free_chat import free_chat_agent
-from services.info_gathering import info_gathering_agent
-from services.advising import advising_agent
-from services.guidance import guidance_agent
 from services.mode_classifier import mode_classifier
-import json, os, uuid
+from services.chat_agent import (
+    free_chat_agent,
+    info_gathering_agent,
+    advising_agent,
+    guidance_agent
+)
+import os, uuid, json
 import pymysql
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
@@ -91,12 +93,16 @@ async def chat_pipeline(request: ChatRequest):
     print(f"domain : {domain}")
     print(f"conv_idx : {conv_idx}")
 
-    if db_has_conv(conv_idx):
+    memory_context = memory.get_memory(conv_idx)
+
+    if db_has_conv(conv_idx) and len(memory_context.chat_memory.messages) == 0:
         db_records = get_chat_history_from_db(conv_idx)
         restore_memory_from_db(conv_idx, db_records)
         print(f"[{conv_idx}] DB 기반 메모리 복원 완료 ({len(db_records)}개 메시지)")
-    else:
+    elif not db_has_conv(conv_idx):
         print(f"[{conv_idx}] 신규 대화 시작")
+    else:
+        print(f"[{conv_idx}] 기존 세션, DB 복원 생략")
 
     memory_context = memory.get_memory(conv_idx)
     current_mode = memory.get_mode(conv_idx)
@@ -126,22 +132,56 @@ async def chat_pipeline(request: ChatRequest):
 
         try:
             if current_mode == "info_gathering":
+                full_text = ""
+
                 async for chunk in info_gathering_agent(query, domain, memory_context):
                     print(f"[INFO_GATHERING] 토큰: {chunk[:100]}")
                     yield chunk
 
+                    # 모든 chunk에서 JSON 데이터 누적
+                    if chunk.startswith("data: "):
+                        raw = chunk.replace("data: ", "").strip()
+
+                        # [DONE]은 JSON이 아니므로 건너뜀
+                        if raw == "[DONE]":
+                            continue
+
+                        try:
+                            data = json.loads(raw)
+                            # token 또는 full 둘 다 커버
+                            token = data.get("token") or data.get("full")
+                            if token:
+                                full_text += token
+                        except Exception as e:
+                            print(f"[파싱 예외 발생]: {e}")
+                            continue
+
+                # 루프가 끝난 후 full_text를 기준으로 전환 판단
+                if "실제 판례를 검색 중입니다" in full_text:
+                    memory.set_mode(conv_idx, "advising")
+                    print("[ADVISING] 모드 전환")
+
+                    async for chunk in advising_agent(query, domain, memory_context):
+                        print(f"[ADVISING] 토큰: {chunk[:100]}")
+                        yield chunk
+                else:
+                    print("추가 정보 수집 필요.")
+
+
             elif current_mode == "advising":
-                async for chunk in advising_agent(query, domain):
-                    print(f"[ADVISOR] 토큰: {chunk[:100]}")
+                async for chunk in advising_agent(query, domain, memory_context):
+                    print(f"[ADVISING] 토큰: {chunk[:100]}")
                     yield chunk
 
             elif current_mode == "guidance":
                 async for chunk in guidance_agent(query, domain, memory_context):
                     print(f"[GUIDANCE] 토큰: {chunk[:100]}")
                     yield chunk
+                memory.set_mode(conv_idx, "free_chat")
+                print(f"[{conv_idx}] guidance 종료 → free_chat 모드로 복귀")
 
             else:  # free_chat
-                async for chunk in free_chat_agent(memory_context, query, domain):
+                async for chunk in free_chat_agent(query, domain, memory_context):
                     print(f"[FREE_CHAT] 토큰: {chunk[:100]}")
                     yield chunk
     

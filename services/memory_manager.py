@@ -8,7 +8,6 @@ class MemoryManager:
         self.sessions = defaultdict(lambda: {
             "memory": ConversationBufferMemory(
                 memory_key="history",
-                input_key="query",
                 return_messages=True,
                 ),
             "mode": "free_chat",
@@ -20,7 +19,6 @@ class MemoryManager:
             self.sessions[conv_idx] = {
                 "memory": ConversationBufferMemory(
                     memory_key="history",
-                    input_key="query",
                     return_messages=True,
                     ),
                 "mode": "free_chat"
