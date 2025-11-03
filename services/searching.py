@@ -19,6 +19,35 @@ INDEX_CHUNK = "minsa_data"
 INDEX_FULL = "minsa_judgement"
 VECTOR_FIELD = "sentences_vector"
 
+# 도메인 키워드 → 인덱스 실제 값 매핑
+# 인덱스의 실제 값 집계 결과:
+#   채권/금전거래, 부동산/임대차, 노동/고용, 교통사고, 의료사고, 이혼/가족
+DOMAIN_MAP = {
+    "교통": "교통사고",
+    "교통사고": "교통사고",
+    "traffic": "교통사고",
+    "부동산": "부동산/임대차",
+    "임대차": "부동산/임대차",
+    "realestate": "부동산/임대차",
+    "lease": "부동산/임대차",
+    "노동": "노동/고용",
+    "고용": "노동/고용",
+    "labor": "노동/고용",
+    "employment": "노동/고용",
+    "의료": "의료사고",
+    "의료사고": "의료사고",
+    "medical": "의료사고",
+    "이혼": "이혼/가족",
+    "가족": "이혼/가족",
+    "family": "이혼/가족",
+    "divorce": "이혼/가족",
+    "채권": "채권/금전거래",
+    "금전": "채권/금전거래",
+    "금전거래": "채권/금전거래",
+    "debt": "채권/금전거래",
+    "money": "채권/금전거래",
+}
+
 # 검색용 질의 요약기
 # 전체 대화 맥락과 최신 질의를 분석, 판례 검색에 적합한 구체적 문장으로 변환함.
 async def summarize_context_for_search(memory_context, latest_query):
@@ -62,14 +91,19 @@ async def hybrid_search(query: str, domain_keyword: str, k: int = 5):
     # [1차 키워드 기반 검색] domain_keyword와 사용자 입력 query를 바탕으로 키워드 기반 1차 검색.
     print(f"\n검색 시작: '{query}' | domain='{domain_keyword}'")
 
+    # UI/외부에서 들어온 도메인을 인덱스의 실제 값으로 정규화
+    mapped_domain = DOMAIN_MAP.get(domain_keyword, domain_keyword)
+
+    must_clauses = [{"match": {"text": query}}]
+    if mapped_domain:
+        # domain 은 keyword 타입이므로 정확 일치 term 사용
+        must_clauses.insert(0, {"term": {"domain": mapped_domain}})
+
     bm25_query = {
         "size": 500,
         "query": {
             "bool": {
-                "must": [
-                    {"term": {"domain": domain_keyword}},
-                    {"match": {"text": query}}
-                ]
+                "must": must_clauses
             }
         }
     }
@@ -80,8 +114,27 @@ async def hybrid_search(query: str, domain_keyword: str, k: int = 5):
     hits = keyword_result["hits"]["hits"]
 
     if not hits:
-        print("[1차 키워드 기반 검색] 결과 없음")
-        return []
+        # 도메인 필터가 원인일 수 있으므로 도메인 없이 재시도
+        if mapped_domain:
+            print("[1차 키워드 기반 검색] 도메인 필터 0건 → 도메인 없이 재시도")
+            fallback_query = {
+                "size": 500,
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"match": {"text": query}}
+                        ]
+                    }
+                }
+            }
+            keyword_result = await asyncio.to_thread(
+                es.search, index=INDEX_CHUNK, body=fallback_query
+            )
+            hits = keyword_result["hits"]["hits"]
+
+        if not hits:
+            print("[1차 키워드 기반 검색] 결과 없음")
+            return []
 
     print(f"[1차 키워드 기반 검색] 문서 수: {len(hits)}")
 
@@ -129,8 +182,9 @@ def get_unique_docs(results, top_n=3):
 
 # 원문 조회
 # chuck에서 가져온 doc_id를 바탕으로 판결문 원문을 조회한다.
+# doc_id는 text 타입이므로 keyword 서브필드를 사용해야 정확 일치 검색이 가능함
 async def fetch_full_text(doc_id):
-    query = {"query": {"term": {"doc_id": doc_id}}}
+    query = {"query": {"term": {"doc_id.keyword": doc_id}}}
     res = await asyncio.to_thread(es.search, index=INDEX_FULL, body=query)
 
     if not res["hits"]["hits"]:

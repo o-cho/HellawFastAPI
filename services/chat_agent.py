@@ -17,8 +17,10 @@ def get_llm(model="gpt-4.1-mini", temperature=0.5):
         streaming=True
     )
 
-async def stream_response(chain, inputs):
-    """공통 스트리밍 처리"""
+async def stream_response(chain, inputs, end_with_done: bool = True):
+    """공통 스트리밍 처리
+    - end_with_done=False 로 주면 마지막 [DONE]은 보내지 않습니다.
+    """
     accumulated = ""
     async for chunk in chain.astream(inputs):
         token = getattr(chunk, "content", str(chunk))
@@ -26,7 +28,8 @@ async def stream_response(chain, inputs):
         yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
         await asyncio.sleep(0.01)
     yield f"data: {json.dumps({'full': accumulated}, ensure_ascii=False)}\n\n"
-    yield "data: [DONE]\n\n"
+    if end_with_done:
+        yield "data: [DONE]\n\n"
 
 async def free_chat_agent(query: str, domain: str, memory_context):
     """자유 질의 응답 메서드"""
@@ -84,7 +87,7 @@ domain_checklists = {
 }
 
 async def info_gathering_agent(query: str, domain: str, memory_context):
-    """사건 정보 수집 메서드"""
+    """사건 정보 수집 메서드 (스트림만 전송, 트리거/자동 전환 없음)"""
     llm = get_llm()
     checklist = domain_checklists.get(domain, ["상황 설명", "원인", "결과"])
     prompt = ChatPromptTemplate.from_messages([
@@ -101,22 +104,36 @@ async def info_gathering_agent(query: str, domain: str, memory_context):
             ---
             임무:
             1. 먼저 사용자의 상황을 2~3문장으로 요약하고 공감합니다.
-            2. 다음 중 하나를 반드시 수행하세요:
-                - 정보가 부족하면 추가 질문을 하세요.
-                - 충분히 이해했다면 **반드시** 마지막 문장에 아래 문구를 포함하세요: "실제 판례를 검색 중입니다."
-            3. 절대 이 문구를 생략하지 마세요. 이 문구는 다음 단계(판례 조언 전환)를 위한 신호입니다.
-
+            2. 상황을 파악하기 위해 추가 질문을 하세요.
             """),
+        
         MessagesPlaceholder(variable_name="history"),
         ("user", "{query}")
     ])
     chain = prompt | llm
     history_vars = memory_context.load_memory_variables({})
     await asyncio.sleep(0)
+
+    # 최근 히스토리에서 연속된 정보수집 응답 횟수 추정 (간단 휴리스틱)
+    history_list = history_vars.get("history", []) or []
+    recent_info_rounds = 0
+    for m in reversed(history_list):
+        s = str(m)
+        # 사용자 발화가 나오면 직전 연속 카운트만 고려
+        if "user" in s.lower():
+            break
+        # 이미 판례 전환 트리거가 있었으면 중단
+        if "실제 판례를 검색 중입니다." in s:
+            break
+        # 보수적으로 어시스턴트 연속 응답이라고 간주
+        recent_info_rounds += 1
+    force_advice = recent_info_rounds >= 2  # 직전까지 2회였다면 이번이 3회차
+
+    # 정보수집 내용을 스트리밍으로 그대로 전송하고 [DONE]으로 종료 (한 라운드)
     async for chunk in stream_response(chain, {
         "query": query,
         "history": history_vars.get("history", [])
-    }):
+    }, end_with_done=True):
         yield chunk
 
 async def advising_agent(user_query: str, domain: str, memory_context:str):
@@ -178,7 +195,7 @@ async def advising_agent(user_query: str, domain: str, memory_context:str):
     history_vars = memory_context.load_memory_variables({})
     await asyncio.sleep(0)
     async for chunk in stream_response(chain, {
-        "query": user_query,
+        "user_query": user_query,
         "law_data": law_data,
         "domain": domain,        
         "history": history_vars.get("history", [])

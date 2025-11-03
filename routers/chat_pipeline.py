@@ -132,46 +132,34 @@ async def chat_pipeline(request: ChatRequest):
 
         try:
             if current_mode == "info_gathering":
-                full_text = ""
+                # 한 번의 요청에서는 정보수집 1회만 스트리밍하고 종료
+                rounds = memory.get_info_rounds(conv_idx)
+                next_round = rounds + 1
+                print(f"[INFO_GATHERING] 스트리밍 라운드 {next_round}/2 (요청 단위)")
 
+                # 새 말풍선 시작 신호 (항상 별도 말풍선)
+                yield "data: {\"new_message\": true}\n\n"
                 async for chunk in info_gathering_agent(query, domain, memory_context):
                     print(f"[INFO_GATHERING] 토큰: {chunk[:100]}")
                     yield chunk
 
-                    # 모든 chunk에서 JSON 데이터 누적
-                    if chunk.startswith("data: "):
-                        raw = chunk.replace("data: ", "").strip()
-
-                        # [DONE]은 JSON이 아니므로 건너뜀
-                        if raw == "[DONE]":
-                            continue
-
-                        try:
-                            data = json.loads(raw)
-                            # token 또는 full 둘 다 커버
-                            token = data.get("token") or data.get("full")
-                            if token:
-                                full_text += token
-                        except Exception as e:
-                            print(f"[파싱 예외 발생]: {e}")
-                            continue
-
-                # 루프가 끝난 후 full_text를 기준으로 전환 판단
-                if "실제 판례를 검색 중입니다" in full_text:
+                memory.increment_info_rounds(conv_idx)
+                if next_round >= 2:
+                    # 다음 요청에서 조언 단계가 시작되도록 모드 전환만 미리 설정
                     memory.set_mode(conv_idx, "advising")
-                    print("[ADVISING] 모드 전환")
-
-                    async for chunk in advising_agent(query, domain, memory_context):
-                        print(f"[ADVISING] 토큰: {chunk[:100]}")
-                        yield chunk
+                    print("[STATE] 정보수집 2회 완료 → 다음 요청에서 조언 단계로 전환 예정")
                 else:
-                    print("추가 정보 수집 필요.")
+                    print("[STATE] 정보수집 1회 완료 → 다음 요청에서 2차 정보수집 진행")
+                # 현재 요청은 여기서 종료 ([DONE]은 info_gathering_agent가 보냄)
+                return
 
 
             elif current_mode == "advising":
                 async for chunk in advising_agent(query, domain, memory_context):
                     print(f"[ADVISING] 토큰: {chunk[:100]}")
                     yield chunk
+                # 조언 완료 후, 다음 라운드를 위해 info_rounds 초기화 및 모드 free_chat 유지/복귀
+                memory.reset_info_rounds(conv_idx)
 
             elif current_mode == "guidance":
                 async for chunk in guidance_agent(query, domain, memory_context):

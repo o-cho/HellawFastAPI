@@ -11,6 +11,7 @@ class MemoryManager:
                 return_messages=True,
                 ),
             "mode": "free_chat",
+            "info_rounds": 0,
         })
 
     def ensure_session(self, conv_idx):
@@ -21,7 +22,8 @@ class MemoryManager:
                     memory_key="history",
                     return_messages=True,
                     ),
-                "mode": "free_chat"
+                "mode": "free_chat",
+                "info_rounds": 0,
             }
 
     def get_memory(self, conv_idx):
@@ -38,6 +40,18 @@ class MemoryManager:
         """특정 세션의 모드 변경"""
         self.ensure_session(conv_idx)
         self.sessions[conv_idx]["mode"] = mode
+
+    def get_info_rounds(self, conv_idx):
+        self.ensure_session(conv_idx)
+        return int(self.sessions[conv_idx].get("info_rounds", 0))
+
+    def increment_info_rounds(self, conv_idx):
+        self.ensure_session(conv_idx)
+        self.sessions[conv_idx]["info_rounds"] = int(self.sessions[conv_idx].get("info_rounds", 0)) + 1
+
+    def reset_info_rounds(self, conv_idx):
+        self.ensure_session(conv_idx)
+        self.sessions[conv_idx]["info_rounds"] = 0
 
     def add(self, conv_idx, role, content):
         """대화를 LangChain Memory에 추가"""
